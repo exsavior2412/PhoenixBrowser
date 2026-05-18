@@ -1,0 +1,14 @@
+# Xcode
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+DerivedData/
+*.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+build/
+
+# macOS
+.DS_Store
+*.swp
+*~
+
+# Generated
+PhoenixBrowser.xcodeproj/
