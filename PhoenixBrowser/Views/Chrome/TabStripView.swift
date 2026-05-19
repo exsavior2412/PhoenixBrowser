@@ -17,7 +17,15 @@ struct TabStripView: View {
                             tab: tab,
                             isActive: tab.id == tabManager.selectedTabID,
                             isHovered: hoveredTabID == tab.id,
-                            onSelect: { tabManager.selectTab(tab) },
+                            onSelect: {
+                                // Always resign omnibox focus first (like Chrome)
+                                NSApp.keyWindow?.makeFirstResponder(nil)
+                                tabManager.selectTab(tab)
+                                // Only re-focus omnibox for home tabs
+                                if tab.url == nil {
+                                    NotificationCenter.default.post(name: .focusOmnibox, object: nil)
+                                }
+                            },
                             onClose: {
                                 withAnimation(.easeOut(duration: 0.15)) {
                                     tabManager.closeTab(tab)
@@ -31,6 +39,7 @@ struct TabStripView: View {
                         withAnimation(.easeOut(duration: 0.15)) {
                             _ = tabManager.addNewTab()
                         }
+                        NotificationCenter.default.post(name: .focusOmnibox, object: nil)
                     } label: {
                         Image(systemName: "plus")
                             .font(.system(size: 12, weight: .medium))

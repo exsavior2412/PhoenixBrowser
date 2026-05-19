@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct AddressBarView: View {
     @ObservedObject var tabManager: TabManager
@@ -6,6 +7,8 @@ struct AddressBarView: View {
     @Binding var panelVisible: Bool
     @FocusState.Binding var isOmniboxFocused: Bool
     @State private var isOmniboxHovered = false
+    @State private var showDownloads = false
+    @StateObject private var downloadManager = DownloadManager.shared
 
     var body: some View {
         HStack(spacing: 6) {
@@ -38,7 +41,26 @@ struct AddressBarView: View {
                     }
                 }
                 chromeIconBtn("doc.on.doc") {}
-                chromeIconBtn("arrow.down.circle") {}
+                Image(systemName: "arrow.down.circle")
+                    .font(.system(size: Edge.Sizes.iconSize, weight: .medium))
+                    .foregroundStyle(Edge.Colors.iconColor)
+                    .frame(width: Edge.Sizes.iconBtnSize, height: Edge.Sizes.iconBtnSize)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        showDownloads.toggle()
+                    }
+                    .popover(isPresented: $showDownloads, arrowEdge: .bottom) {
+                        DownloadsPopover(downloadManager: downloadManager)
+                            .frame(width: 300, height: 200)
+                    }
+                Image(systemName: "hammer.fill")
+                    .font(.system(size: Edge.Sizes.iconSize, weight: .medium))
+                    .foregroundStyle(Edge.Colors.iconColor)
+                    .frame(width: Edge.Sizes.iconBtnSize, height: Edge.Sizes.iconBtnSize)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        NotificationCenter.default.post(name: .toggleDevTools, object: nil)
+                    }
                 chromeIconBtn("puzzlepiece.extension") {}
 
                 ZStack {
@@ -70,28 +92,14 @@ struct AddressBarView: View {
         HStack(spacing: 5.5) {
             securityIcon.frame(width: 20, height: 20)
 
-            ZStack {
-                TextField("Search or enter address", text: $tabManager.addressText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12.2))
-                    .foregroundStyle(Color(hex: 0x222222))
-                    .focused($isOmniboxFocused)
-                    .onSubmit {
-                        tabManager.navigate(to: tabManager.addressText)
-                        isOmniboxFocused = false
-                    }
-                    .opacity(isOmniboxFocused ? 1 : 0)
-
-                if !isOmniboxFocused {
-                    Text(displayURL)
-                        .font(.system(size: 12.2))
-                        .foregroundStyle(Edge.Colors.textSecondary)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .onTapGesture { isOmniboxFocused = true }
+            OmniboxTextField(
+                text: $tabManager.addressText,
+                displayText: displayURL,
+                isFocused: $isOmniboxFocused,
+                onSubmit: {
+                    tabManager.navigate(to: tabManager.addressText)
                 }
-            }
+            )
 
             omniboxIcon("mic.fill") {}
             omniboxIcon("sparkle") {}
@@ -110,16 +118,11 @@ struct AddressBarView: View {
         )
         .onHover { isOmniboxHovered = $0 }
         .overlay(alignment: .bottom) {
-            if let tab = tabManager.selectedTab, tab.isLoading {
-                GeometryReader { geo in
-                    Capsule()
-                        .fill(Edge.Colors.accentBlue)
-                        .frame(width: geo.size.width * tab.estimatedProgress, height: 2)
-                        .animation(.linear(duration: 0.2), value: tab.estimatedProgress)
-                }
-                .frame(height: 2)
-                .offset(y: 2)
-            }
+            ProgressBarView(
+                isLoading: tabManager.selectedTab?.isLoading == true,
+                progress: tabManager.selectedTab?.estimatedProgress ?? 0
+            )
+            .offset(y: 2)
         }
     }
 
@@ -153,5 +156,143 @@ struct AddressBarView: View {
                 .clipShape(Circle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Native NSTextField wrapper for proper focus control
+
+struct OmniboxTextField: NSViewRepresentable {
+    @Binding var text: String
+    var displayText: String
+    var isFocused: FocusState<Bool>.Binding
+    var onSubmit: () -> Void
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.isBordered = false
+        field.drawsBackground = false
+        field.font = .systemFont(ofSize: 12.2)
+        field.textColor = .init(hex: 0x222222)
+        field.placeholderString = "Search or enter address"
+        field.focusRingType = .none
+        field.lineBreakMode = .byTruncatingTail
+        field.cell?.truncatesLastVisibleLine = true
+        field.delegate = context.coordinator
+        field.stringValue = displayText
+        field.textColor = NSColor(Edge.Colors.textSecondary)
+
+        // Global click monitor: resign when clicking outside omnibox
+        context.coordinator.mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak field] event in
+            guard let field = field, let window = field.window else { return event }
+            let isEditing = window.firstResponder == field.currentEditor()
+            guard isEditing else { return event }
+
+            // Check if click is inside the text field
+            let locationInField = field.convert(event.locationInWindow, from: nil)
+            if !field.bounds.contains(locationInField) {
+                // Click outside — resign
+                window.makeFirstResponder(nil)
+            }
+            return event
+        }
+
+        return field
+    }
+
+    static func dismantleNSView(_ nsView: NSTextField, coordinator: Coordinator) {
+        if let monitor = coordinator.mouseMonitor {
+            NSEvent.removeMonitor(monitor)
+            coordinator.mouseMonitor = nil
+        }
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        let isEditing = field.window?.firstResponder == field.currentEditor()
+
+        if !isEditing {
+            // Display mode: show domain only
+            field.stringValue = displayText
+            field.textColor = NSColor(Edge.Colors.textSecondary)
+        }
+
+        // Handle programmatic focus request (Cmd+T, click +)
+        if isFocused.wrappedValue && !isEditing {
+            DispatchQueue.main.async {
+                field.window?.makeFirstResponder(field)
+                field.stringValue = self.text
+                field.textColor = .init(hex: 0x222222)
+                field.selectText(nil)
+            }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        let parent: OmniboxTextField
+        var mouseMonitor: Any?
+
+        init(_ parent: OmniboxTextField) {
+            self.parent = parent
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            parent.text = field.stringValue
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                parent.onSubmit()
+                // Resign focus after submit
+                DispatchQueue.main.async {
+                    control.window?.makeFirstResponder(nil)
+                    self.parent.isFocused.wrappedValue = false
+                }
+                return true
+            }
+            if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+                // Escape: resign focus
+                DispatchQueue.main.async {
+                    control.window?.makeFirstResponder(nil)
+                    self.parent.isFocused.wrappedValue = false
+                }
+                return true
+            }
+            return false
+        }
+
+        func controlTextDidBeginEditing(_ obj: Notification) {
+            parent.isFocused.wrappedValue = true
+            // Show full URL on begin edit
+            if let field = obj.object as? NSTextField {
+                field.stringValue = parent.text
+                field.textColor = .init(hex: 0x222222)
+            }
+        }
+
+        func controlTextDidEndEditing(_ obj: Notification) {
+            parent.isFocused.wrappedValue = false
+            // Show display text on end edit
+            if let field = obj.object as? NSTextField {
+                field.stringValue = parent.displayText
+                field.textColor = NSColor(Edge.Colors.textSecondary)
+            }
+        }
+    }
+}
+
+// MARK: - NSColor hex helper
+
+private extension NSColor {
+    convenience init(hex: UInt) {
+        self.init(
+            red: CGFloat((hex >> 16) & 0xff) / 255,
+            green: CGFloat((hex >> 8) & 0xff) / 255,
+            blue: CGFloat(hex & 0xff) / 255,
+            alpha: 1
+        )
     }
 }

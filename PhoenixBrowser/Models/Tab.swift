@@ -59,6 +59,17 @@ final class Tab: Identifiable, ObservableObject {
             configuration.userContentController.addUserScript(script)
         }
 
+        // Inject DevTools capture script
+        let devToolsScript = WKUserScript(
+            source: DevToolsManager.shared.captureScript,
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: true
+        )
+        configuration.userContentController.addUserScript(devToolsScript)
+        let handler = ConsoleMessageHandler()
+        configuration.userContentController.add(handler, name: "phoenixConsole")
+        configuration.userContentController.add(handler, name: "phoenixNetwork")
+
         self.webView = WKWebView(frame: .zero, configuration: configuration)
         self.webView.allowsBackForwardNavigationGestures = true
         self.webView.allowsMagnification = true

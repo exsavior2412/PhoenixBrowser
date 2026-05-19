@@ -9,13 +9,17 @@ final class TabManager: ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
     private var tabObservers = [UUID: Set<AnyCancellable>]()
+    private let sessionKey = "phoenix_session_tabs"
+    private let selectedKey = "phoenix_session_selected"
 
     var selectedTab: Tab? {
         tabs.first { $0.id == selectedTabID }
     }
 
     init() {
-        addNewTab()  // Open home page by default
+        if !restoreSession() {
+            addNewTab()
+        }
     }
 
     var isShowingHomePage: Bool {
@@ -28,6 +32,7 @@ final class TabManager: ObservableObject {
         tabs.append(tab)
         selectTab(tab)
         observeTab(tab)
+        saveSession()
         return tab
     }
 
@@ -50,6 +55,7 @@ final class TabManager: ObservableObject {
         if tabs.isEmpty {
             addNewTab()
         }
+        saveSession()
     }
 
     func selectTab(_ tab: Tab) {
@@ -75,10 +81,73 @@ final class TabManager: ObservableObject {
         }
     }
 
+    func closeSelectedTab() {
+        guard let tab = selectedTab else { return }
+        closeTab(tab)
+    }
+
     func goBack() { selectedTab?.webView.goBack() }
     func goForward() { selectedTab?.webView.goForward() }
     func reload() { selectedTab?.webView.reload() }
     func stopLoading() { selectedTab?.webView.stopLoading() }
+
+    // MARK: - Session Persistence
+
+    private var isRestoring = false
+
+    func saveSession() {
+        guard !isRestoring else { return }
+        let session: [String] = tabs.map { $0.url?.absoluteString ?? "" }
+        guard !session.isEmpty else { return }
+        let selectedIndex = tabs.firstIndex(where: { $0.id == selectedTabID }) ?? 0
+
+        let defaults = UserDefaults.standard
+        defaults.set(session, forKey: sessionKey)
+        defaults.set(selectedIndex, forKey: selectedKey)
+        defaults.synchronize()
+
+        NSLog("[Phoenix] Session saved: \(session.count) tabs, selected=\(selectedIndex)")
+    }
+
+    @discardableResult
+    private func restoreSession() -> Bool {
+        let defaults = UserDefaults.standard
+        guard let session = defaults.stringArray(forKey: sessionKey),
+              !session.isEmpty,
+              // Don't restore if only empty home tabs
+              session.contains(where: { !$0.isEmpty })
+        else {
+            NSLog("[Phoenix] No session to restore")
+            return false
+        }
+
+        NSLog("[Phoenix] Restoring \(session.count) tabs")
+        isRestoring = true
+
+        let selectedIndex = defaults.integer(forKey: selectedKey)
+
+        for urlString in session {
+            if urlString.isEmpty {
+                let tab = Tab()
+                tabs.append(tab)
+                observeTab(tab)
+            } else if let url = URL(string: urlString) {
+                let tab = Tab(url: url)
+                tabs.append(tab)
+                observeTab(tab)
+            }
+        }
+
+        // Select the previously active tab
+        let safeIndex = min(selectedIndex, tabs.count - 1)
+        if safeIndex >= 0, safeIndex < tabs.count {
+            selectTab(tabs[safeIndex])
+        }
+
+        isRestoring = false
+        NSLog("[Phoenix] Restored \(tabs.count) tabs, selected=\(safeIndex)")
+        return !tabs.isEmpty
+    }
 
     private func observeTab(_ tab: Tab) {
         var observers = Set<AnyCancellable>()
@@ -99,13 +168,18 @@ final class TabManager: ObservableObject {
                 if tab?.id == self?.selectedTabID {
                     self?.addressText = url?.absoluteString ?? ""
                 }
+                // Auto-save session whenever any tab navigates
+                self?.saveSession()
             }
             .store(in: &observers)
 
         tab.webView.publisher(for: \.isLoading)
             .receive(on: RunLoop.main)
-            .sink { [weak tab] isLoading in
+            .sink { [weak self, weak tab] isLoading in
                 tab?.isLoading = isLoading
+                if tab?.id == self?.selectedTabID {
+                    self?.objectWillChange.send()
+                }
             }
             .store(in: &observers)
 
@@ -125,8 +199,12 @@ final class TabManager: ObservableObject {
 
         tab.webView.publisher(for: \.estimatedProgress)
             .receive(on: RunLoop.main)
-            .sink { [weak tab] progress in
+            .sink { [weak self, weak tab] progress in
                 tab?.estimatedProgress = progress
+                // Force SwiftUI to re-render progress bar for selected tab
+                if tab?.id == self?.selectedTabID {
+                    self?.objectWillChange.send()
+                }
             }
             .store(in: &observers)
 
