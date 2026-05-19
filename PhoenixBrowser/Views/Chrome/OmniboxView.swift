@@ -41,18 +41,14 @@ struct AddressBarView: View {
                     }
                 }
                 chromeIconBtn("doc.on.doc") {}
-                Image(systemName: "arrow.down.circle")
-                    .font(.system(size: Edge.Sizes.iconSize, weight: .medium))
-                    .foregroundStyle(Edge.Colors.iconColor)
-                    .frame(width: Edge.Sizes.iconBtnSize, height: Edge.Sizes.iconBtnSize)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        showDownloads.toggle()
-                    }
-                    .popover(isPresented: $showDownloads, arrowEdge: .bottom) {
-                        DownloadsPopover(downloadManager: downloadManager)
-                            .frame(width: 300, height: 200)
-                    }
+                DownloadToolbarIcon(
+                    downloadManager: downloadManager,
+                    showPopover: $showDownloads
+                )
+                .popover(isPresented: $showDownloads, arrowEdge: .bottom) {
+                    DownloadsPopover(downloadManager: downloadManager)
+                        .frame(width: 300, height: 200)
+                }
                 Image(systemName: "hammer.fill")
                     .font(.system(size: Edge.Sizes.iconSize, weight: .medium))
                     .foregroundStyle(Edge.Colors.iconColor)
